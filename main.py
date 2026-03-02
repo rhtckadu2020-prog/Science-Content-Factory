@@ -12,7 +12,7 @@ DB_URL = os.getenv("FIREBASE_DB_URL")
 
 genai.configure(api_key=GEMINI_KEY)
 # Gemini 2.0 Flash භාවිතා කිරීම
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(json.loads(FIREBASE_JSON))

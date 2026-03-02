@@ -2,6 +2,7 @@ import os
 import json
 import time
 from google import genai
+from google.genai import types
 import firebase_admin
 from firebase_admin import credentials, db
 
@@ -10,50 +11,41 @@ GEMINI_KEY = os.getenv("GEMINI_KEY_1")
 FIREBASE_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT")
 DB_URL = os.getenv("FIREBASE_DB_URL")
 
-# අලුත් Client එක සෑදීම
 client = genai.Client(api_key=GEMINI_KEY)
+
+# 2026 වසරේ වැඩ කරන අලුත්ම සහ වේගවත්ම මාදිලිය
+MODEL_ID = "gemini-2.5-flash" 
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(json.loads(FIREBASE_JSON))
     firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
-
-def get_best_model():
-    """ඔබේ Key එකට වැඩ කරන හොඳම Flash model එක සොයා ගැනීම"""
-    try:
-        # දැනට පාවිච්චි කළ හැකි models ලැයිස්තුව ලබා ගැනීම
-        models = client.models.list()
-        for m in models:
-            # Flash model එකක් සහ generateContent පුළුවන් එකක් තෝරා ගැනීම
-            if "flash" in m.name.lower() and "generateContent" in m.supported_methods:
-                print(f"Using Model: {m.name}")
-                return m.name
-    except Exception as e:
-        print(f"Error listing models: {e}")
-    return "gemini-1.5-flash" # Default එකක් ලෙස
-
-MODEL_ID = get_best_model()
 
 def process_lesson(pdf_path, file_name):
     lesson_id = file_name.replace(".pdf", "").replace(" ", "_")
     output_dir = f"outputs/{lesson_id}"
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Processing PDF: {file_name}...")
+    print(f"Uploading PDF to Google Server: {file_name}...")
     
-    with open(pdf_path, "rb") as f:
-        pdf_data = f.read()
+    # PDF එක Upload කිරීම (ලොකු ෆයිල් වලට සහය දැක්වීමට)
+    try:
+        uploaded_file = client.files.upload(file=pdf_path)
+    except Exception as e:
+        print(f"PDF Upload Error: {e}")
+        return
 
     # 1. පාඩම කොටස් 10කට කැඩීම
+    print("Splitting PDF into 10 topics...")
     split_prompt = "Analyze this PDF and divide it into 10 logical sub-topics for teaching. Return only the list of 10 titles."
     
     try:
         response = client.models.generate_content(
             model=MODEL_ID,
-            contents=[split_prompt, {"inline_data": {"data": pdf_data, "mime_type": "application/pdf"}}]
+            contents=[uploaded_file, split_prompt]
         )
         sub_topics = response.text.split('\n')
-        sub_topics = [t.strip() for t in sub_topics if t.strip()][:10]
-        print(f"Sub-topics: {sub_topics}")
+        sub_topics =[t.strip() for t in sub_topics if t.strip()][:10]
+        print(f"Sub-topics found: {sub_topics}")
     except Exception as e:
         print(f"Error splitting PDF: {e}")
         return
@@ -69,13 +61,13 @@ def process_lesson(pdf_path, file_name):
         2. Create a Student Activity Note.
         3. Create a Video Script (Explain PDF facts + Activity Note).
         4. Create a styled HTML Note (with CSS).
-        Format: Use markers [STUDY_NOTE], [ACTIVITY_NOTE], [VIDEO_SCRIPT], [HTML_NOTE].
+        Format: Use markers [STUDY_NOTE], [ACTIVITY_NOTE], [VIDEO_SCRIPT],[HTML_NOTE].
         """
         
         try:
             res = client.models.generate_content(
                 model=MODEL_ID,
-                contents=[content_prompt, {"inline_data": {"data": pdf_data, "mime_type": "application/pdf"}}]
+                contents=[uploaded_file, content_prompt]
             )
             raw_text = res.text
             
@@ -91,7 +83,7 @@ def process_lesson(pdf_path, file_name):
             with open(f"{output_dir}/part_{i}.html", "w", encoding="utf-8") as f:
                 f.write(part_content["html"])
             
-            time.sleep(10) # Rate limit පාලනයට
+            time.sleep(10) # Google Limit එකට අහුවෙන්නේ නැතිවෙන්න තත්පර 10ක විවේකයක්
         except Exception as e:
             print(f"Error generating part {i}: {e}")
 
@@ -101,8 +93,15 @@ def process_lesson(pdf_path, file_name):
 
 def main():
     input_folder = "inputs"
-    if not os.path.exists(input_folder): return
-    files = [f for f in os.listdir(input_folder) if f.endswith(".pdf")]
+    if not os.path.exists(input_folder): 
+        print("Inputs folder not found!")
+        return
+        
+    files =[f for f in os.listdir(input_folder) if f.endswith(".pdf")]
+    if not files:
+        print("No PDF files found in inputs folder!")
+        return
+
     for file_name in files:
         process_lesson(os.path.join(input_folder, file_name), file_name)
 

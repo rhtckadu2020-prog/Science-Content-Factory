@@ -13,12 +13,25 @@ DB_URL = os.getenv("FIREBASE_DB_URL")
 # අලුත් Client එක සෑදීම
 client = genai.Client(api_key=GEMINI_KEY)
 
-# වඩාත් ස්ථාවර 1.5 Flash මාදිලිය භාවිතා කිරීම
-MODEL_ID = "gemini-1.5-flash" 
-
 if not firebase_admin._apps:
     cred = credentials.Certificate(json.loads(FIREBASE_JSON))
     firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
+
+def get_best_model():
+    """ඔබේ Key එකට වැඩ කරන හොඳම Flash model එක සොයා ගැනීම"""
+    try:
+        # දැනට පාවිච්චි කළ හැකි models ලැයිස්තුව ලබා ගැනීම
+        models = client.models.list()
+        for m in models:
+            # Flash model එකක් සහ generateContent පුළුවන් එකක් තෝරා ගැනීම
+            if "flash" in m.name.lower() and "generateContent" in m.supported_methods:
+                print(f"Using Model: {m.name}")
+                return m.name
+    except Exception as e:
+        print(f"Error listing models: {e}")
+    return "gemini-1.5-flash" # Default එකක් ලෙස
+
+MODEL_ID = get_best_model()
 
 def process_lesson(pdf_path, file_name):
     lesson_id = file_name.replace(".pdf", "").replace(" ", "_")
@@ -27,7 +40,6 @@ def process_lesson(pdf_path, file_name):
 
     print(f"Processing PDF: {file_name}...")
     
-    # PDF එක කියවීම
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
 
@@ -41,7 +53,7 @@ def process_lesson(pdf_path, file_name):
         )
         sub_topics = response.text.split('\n')
         sub_topics = [t.strip() for t in sub_topics if t.strip()][:10]
-        print(f"Sub-topics identified: {sub_topics}")
+        print(f"Sub-topics: {sub_topics}")
     except Exception as e:
         print(f"Error splitting PDF: {e}")
         return
@@ -67,7 +79,6 @@ def process_lesson(pdf_path, file_name):
             )
             raw_text = res.text
             
-            # Parsing logic
             part_content = {
                 "title": topic,
                 "note": raw_text.split("[STUDY_NOTE]")[1].split("[ACTIVITY_NOTE]")[0] if "[STUDY_NOTE]" in raw_text else "",
@@ -77,31 +88,21 @@ def process_lesson(pdf_path, file_name):
             }
             
             lesson_data["parts"][f"part_{i}"] = part_content
-            
-            # Local file save (for Artifacts)
             with open(f"{output_dir}/part_{i}.html", "w", encoding="utf-8") as f:
                 f.write(part_content["html"])
             
-            # Rate limit වැළැක්වීමට තත්පර 10ක විවේකයක්
-            time.sleep(10) 
+            time.sleep(10) # Rate limit පාලනයට
         except Exception as e:
             print(f"Error generating part {i}: {e}")
 
     # 3. Firebase Update
     db.reference(f'lessons/{lesson_id}').set(lesson_data)
-    print(f"Successfully Completed and Uploaded to Firebase: {lesson_id}")
+    print(f"Successfully Completed: {lesson_id}")
 
 def main():
     input_folder = "inputs"
-    if not os.path.exists(input_folder): 
-        print("Inputs folder not found!")
-        return
-        
+    if not os.path.exists(input_folder): return
     files = [f for f in os.listdir(input_folder) if f.endswith(".pdf")]
-    if not files:
-        print("No PDF files found in inputs folder!")
-        return
-
     for file_name in files:
         process_lesson(os.path.join(input_folder, file_name), file_name)
 

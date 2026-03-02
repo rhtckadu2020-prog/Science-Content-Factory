@@ -1,93 +1,93 @@
 import os
 import json
 import time
-import google.generativeai as genai
+from google import genai # අලුත්ම SDK එක
 import firebase_admin
 from firebase_admin import credentials, db
-from google.api_core import exceptions
 
-# --- 1. CONFIGURATION & SETUP ---
+# --- 1. SETUP ---
 GEMINI_KEY = os.getenv("GEMINI_KEY_1")
 FIREBASE_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT")
 DB_URL = os.getenv("FIREBASE_DB_URL")
 
-genai.configure(api_key=GEMINI_KEY)
-# වඩාත් ස්ථාවර 1.5 Flash මාදිලිය භාවිතා කිරීම
-model = genai.GenerativeModel('gemini-1.5-flash')
+# අලුත් Client එක සෑදීම
+client = genai.Client(api_key=GEMINI_KEY)
+MODEL_ID = "gemini-2.0-flash" # දැන් ඔබට 2.0 පාවිච්චි කළ හැක
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(json.loads(FIREBASE_JSON))
     firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
-
-def safe_generate_content(parts):
-    """Rate limit එකක් ආවොත් නැවත උත්සාහ කරන ශ්‍රිතය"""
-    for i in range(3):  # උපරිම 3 වතාවක් උත්සාහ කරයි
-        try:
-            return model.generate_content(parts)
-        except exceptions.ResourceExhausted:
-            print(f"Quota පිරී ඇත. තත්පර 60ක් රැඳී සිටිනවා... (Attempt {i+1})")
-            time.sleep(60)
-    return None
 
 def process_lesson(pdf_path, file_name):
     lesson_id = file_name.replace(".pdf", "").replace(" ", "_")
     output_dir = f"outputs/{lesson_id}"
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Uploading PDF: {file_name}...")
-    sample_file = genai.upload_file(path=pdf_path, display_name=file_name)
+    print(f"Processing PDF: {file_name}...")
     
-    print("Splitting lesson into 10 parts...")
+    # PDF එක කියවීම
+    with open(pdf_path, "rb") as f:
+        pdf_data = f.read()
+
+    # 1. පාඩම කොටස් 10කට කැඩීම
     split_prompt = "Analyze this PDF and divide it into 10 logical sub-topics for teaching. Return only the list of 10 titles."
-    response = safe_generate_content([sample_file, split_prompt])
     
-    if not response: return
-    
-    sub_topics = response.text.split('\n')
-    sub_topics = [t.strip() for t in sub_topics if t.strip()][:10]
+    try:
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=[split_prompt, {"inline_data": {"data": pdf_data, "mime_type": "application/pdf"}}]
+        )
+        sub_topics = response.text.split('\n')
+        sub_topics = [t.strip() for t in sub_topics if t.strip()][:10]
+    except Exception as e:
+        print(f"Error splitting PDF: {e}")
+        return
 
     lesson_data = {"title": lesson_id, "parts": {}}
 
+    # 2. එක් එක් කොටස සඳහා Content සෑදීම
     for i, topic in enumerate(sub_topics, 1):
-        print(f"Generating Content for Part {i}: {topic}...")
+        print(f"Generating Part {i}: {topic}...")
         content_prompt = f"""
         Based on the attached PDF, for the sub-topic '{topic}':
-        1. Create a detailed Study Note (Text).
-        2. Create a Student Activity Note (Practical tasks).
-        3. Create a Video Script: This must cover all scientific facts from the PDF for this section AND explain the activities in the Student Activity Note.
-        4. Create a beautifully styled HTML Note (with CSS) for this section.
-        Format: Return the output with clear markers like [STUDY_NOTE], [ACTIVITY_NOTE], [VIDEO_SCRIPT], [HTML_NOTE].
+        1. Create a detailed Study Note.
+        2. Create a Student Activity Note.
+        3. Create a Video Script (Explain PDF facts + Activity Note).
+        4. Create a styled HTML Note (with CSS).
+        Format: Use markers [STUDY_NOTE], [ACTIVITY_NOTE], [VIDEO_SCRIPT], [HTML_NOTE].
         """
         
-        res = safe_generate_content([sample_file, content_prompt])
-        if not res: continue
-        
-        raw_text = res.text
-        part_content = {
-            "title": topic,
-            "note": raw_text.split("[STUDY_NOTE]")[1].split("[ACTIVITY_NOTE]")[0] if "[STUDY_NOTE]" in raw_text else "",
-            "activity": raw_text.split("[ACTIVITY_NOTE]")[1].split("[VIDEO_SCRIPT]")[0] if "[ACTIVITY_NOTE]" in raw_text else "",
-            "script": raw_text.split("[VIDEO_SCRIPT]")[1].split("[HTML_NOTE]")[0] if "[VIDEO_SCRIPT]" in raw_text else "",
-            "html": raw_text.split("[HTML_NOTE]")[1] if "[HTML_NOTE]" in raw_text else ""
-        }
-        
-        lesson_data["parts"][f"part_{i}"] = part_content
-        with open(f"{output_dir}/part_{i}.html", "w", encoding="utf-8") as f:
-            f.write(part_content["html"])
-        time.sleep(10) # Request අතර විරාමයක්
+        try:
+            res = client.models.generate_content(
+                model=MODEL_ID,
+                contents=[content_prompt, {"inline_data": {"data": pdf_data, "mime_type": "application/pdf"}}]
+            )
+            raw_text = res.text
+            
+            # Parsing logic
+            part_content = {
+                "title": topic,
+                "note": raw_text.split("[STUDY_NOTE]")[1].split("[ACTIVITY_NOTE]")[0] if "[STUDY_NOTE]" in raw_text else "",
+                "activity": raw_text.split("[ACTIVITY_NOTE]")[1].split("[VIDEO_SCRIPT]")[0] if "[ACTIVITY_NOTE]" in raw_text else "",
+                "script": raw_text.split("[VIDEO_SCRIPT]")[1].split("[HTML_NOTE]")[0] if "[VIDEO_SCRIPT]" in raw_text else "",
+                "html": raw_text.split("[HTML_NOTE]")[1] if "[HTML_NOTE]" in raw_text else ""
+            }
+            
+            lesson_data["parts"][f"part_{i}"] = part_content
+            with open(f"{output_dir}/part_{i}.html", "w", encoding="utf-8") as f:
+                f.write(part_content["html"])
+            
+            time.sleep(5) # Rate limit පාලනයට
+        except Exception as e:
+            print(f"Error generating part {i}: {e}")
 
-    # Quiz සෑදීම
-    print("Generating Quizzes...")
-    quiz_prompt = "Generate 120 MCQs in JSON format (easy, medium, hard) based on the PDF."
-    quiz_res = safe_generate_content([sample_file, quiz_prompt])
-    if quiz_res:
-        lesson_data["quizzes_raw"] = quiz_res.text
-
+    # 3. Firebase Update
     db.reference(f'lessons/{lesson_id}').set(lesson_data)
-    print(f"Successfully completed: {lesson_id}")
+    print(f"Completed: {lesson_id}")
 
 def main():
     input_folder = "inputs"
+    if not os.path.exists(input_folder): return
     for file_name in os.listdir(input_folder):
         if file_name.endswith(".pdf"):
             process_lesson(os.path.join(input_folder, file_name), file_name)

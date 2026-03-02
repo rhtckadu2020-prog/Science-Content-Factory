@@ -1,9 +1,9 @@
 name: Run Science Factory
 
 on:
-  workflow_dispatch: # ඔබට අවශ්‍ය වෙලාවක manual රන් කරන්න
+  workflow_dispatch:
   schedule:
-    - cron: '0 19 * * *' # හැමදාම රෑ 12:30 ට (SL Time) ස්වයංක්‍රීයව රන් වෙන්න
+    - cron: '0 19 * * *'
 
 jobs:
   build:
@@ -11,17 +11,17 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
+        python-version: '3.11' # අලුත් Python version එක
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install google-generativeai firebase-admin
+        pip install google-genai firebase-admin # අලුත්ම google-genai library එක
 
     - name: Run Science Factory Script
       env:
@@ -29,9 +29,3 @@ jobs:
         FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
       run: python main.py
-
-    - name: Upload Generated Files
-      uses: actions/upload-artifact@v4
-      with:
-        name: science-content-output
-        path: outputs/

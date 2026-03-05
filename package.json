@@ -1,1 +1,13 @@
-
+{
+  "name": "gemini-elearning-bot",
+  "version": "1.0.0",
+  "description": "Automated E-Learning Content Generator",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.2.0",
+    "dotenv": "^16.4.5"
+  }
+}

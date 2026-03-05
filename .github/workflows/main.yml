@@ -30,7 +30,6 @@ jobs:
         FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
       run: python main.py
 
-    # මට අමතක වූ කොටස මෙන්න! මේකෙන් තමයි හැදෙන ෆයිල් ටික Zip කරලා දෙන්නේ
     - name: Upload Generated Files
       uses: actions/upload-artifact@v4
       with:
